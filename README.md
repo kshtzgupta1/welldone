@@ -1,2 +1,2 @@
 # welldone-internship
-contains reports generated for taarifa and other water data for to aid WellDone in deploying IOT pumps in Cambodia
+contains reports generated fora modelling project on water pumps data collected by the non-profit Taarifa in Tanzania
