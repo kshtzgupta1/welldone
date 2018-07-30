@@ -1,0 +1,695 @@
+---
+title: "Taarifa Report"
+author: "Authored by Kshitiz Gupta."
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+  word_document:
+    toc: yes
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, packages}
+library(tidyverse)
+library(scales)
+library(gridExtra)
+library(data.table)
+library(ggmap)
+library(randomForest)
+library(gridExtra)
+library(GGally)
+library(sm)
+source("https://raw.githubusercontent.com/janhove/janhove.github.io/master/RCode/sortLvls.R")
+library(RColorBrewer)
+library(ash)
+library(lattice)
+colors_vec <- c("forestgreen", "orange", "red")
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+statusColor = c("red", "orange", "forestgreen")
+#generate a line frequency plot
+lineFrequency <- function(x, 
+                          c,
+                          xlab,
+                          cor=F){
+  #calculate fractions for each value level
+  subData <- data.frame(independent = x, dependent = c)
+  subData[which(subData$independent == 0), 'independent'] = NA
+  subData <- as.data.frame(table(subData) / rowSums(table(subData)))
+    
+  if (class(x) == 'Date'){
+    subData$independent <- as.Date(as.character(subData$independent))
+  } else{
+    subData$independent <- as.numeric(as.character(subData$independent))
+  }
+  
+  
+
+  p <- ggplot(data = subData, 
+              aes(x = independent, 
+                  y = Freq, 
+                  color = dependent)) + 
+    geom_point() + 
+    geom_smooth(method=lm) + 
+    labs(x=xlab, 
+         y='Frequency') + 
+  scale_color_manual(values=statusColor, 
+                     name = "Water Point Status")
+  
+  #calculate correlation coefficient
+  if(cor){
+    wideSubData <- reshape(subData, 
+                         idvar='independent', 
+                         timevar='dependent', 
+                         direction='wide')
+    for (i in unique(c)){
+      print(i)
+      print(cor.test(as.numeric(wideSubData$independent),
+                   wideSubData[[paste0('Freq.', i)]]))
+    }
+  }
+  
+  
+  
+  p
+}
+```
+
+```{r, include = F,message=FALSE, warning=FALSE, read_data}
+train_x = read_csv('data/train_x.csv')
+train_y = read_csv('data/train_y.csv')
+test_x = read_csv('data/test_x.csv')
+water = merge(train_x, train_y)
+```
+
+# Introduction
+
+In the developing world, people’s health benefits and their willingness to pay for clean water are best realized when clean water infrastructure performs extremely well. Realizing this the Tanzanian Ministry of Water teamed up with Taarifa, a non-profit to host a Data Science Competition to predict water point failures in order to better maintain the country's water infrastructure. The Data Science Competition hosted on www.drivendata.com  quickly became popular and data scientists from worldwide participated, exploring the use of a variety of predictive/classification modeling techniques. Throughout this report the terms 'pump' and 'waterpoint' have been used interchangeably to mean the same thing.
+
+The training data set here consists of 59,400 Tanzanian water pumps and predictions are to be made on a test set of 14,850 waterpoints. Every water pump has 39 categorical and numerical featues (attributes) like the type of pump, organization that installed the pump, funder of the pump, location, altitude, year constructed, management method, water source, and the quality of the water delivered by the pump. 
+
+# Response Variable (Variable that we are trying to predict)
+
+The response variable `status_group` has three possible classes:
+
+`functional`: The pump is operating and does not need any repair/maintenance
+
+`functional needs repair`: The pump is operating but needs repair
+
+`non functional`: The pump is not operating
+
+```{r, echo = F, well_status_plot, message=F, warning= F}
+
+water %>% ggplot(aes(x = sortLvlsByN.fnc(as.factor(status_group)))) + geom_bar(aes(y = (..count..)/sum(..count..)), fill = "dodgerblue", width = 0.5) +
+  geom_text(aes(y = ((..count..)/sum(..count..)), label = scales::percent((..count..)/sum(..count..))), stat = "count", vjust = -0.25) +
+  scale_y_continuous(labels = percent) +  labs(title = "Waterpoint Status Percentages", y = "Percent") + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=0,hjust=0.5, face = "bold"), plot.title = element_text(hjust=0.5))
+```
+
+As the plot tells us 54.3% of all pumps in the training data were found to be functional, 7.3% had a status of  functional needs repair and 38.4% were not functioning and so we notice severe **class imbalance** in this dataset which makes highly accurate classifications of the three classes difficult. 
+
+# Data Dictionary
+
+The Data Dictionary provided in the DrivenData competition doesn't provide a comprehensive and detailed description of the variables and this is rectified in the updated data dictionary below:
+
+| Variable              | Definition                                                      |
+|-----------------------|-----------------------------------------------------------------|
+| id                    | Identification Variable (not a predictor)                       |
+| date_recorded         | Date of data collection by survey company                       |
+| recorded_by           | Name of the data collection / survey company                    |
+| amount_tsh            | Metric indicating total static head for pump; should be > 0     |
+| gps_height            | Altitude of pump                                                |
+| population            | Human population in immediate vicinty of pump                   |
+| longitude             | Longitudinal coordinate of pump                                 |
+| latitude              | Latitudinal coordinate of pump                                  |
+| num_private           | No definition is available for this variable                    |
+| funder                | Name of organization that funded installation of pump           |
+| installer             | Name of organization that installed the pump                    |
+| wpt_name              | Name assigned to given waterpoint                               |
+| basin                 | Name of geographic water basin where pump is located            |
+| subvillage            | Name of geographic subvillage where pump is located             |
+| region                | Name of geographic region in Tanzania where pump is located     |
+| region_code           | Numeric ID for region variable                                  |
+| district_code         | Numeric ID of district within a region where pump is located    |
+| lga                   | Tanzania-specific geographic indicator of where pump is located |
+| ward                  | Name of Tanzanian geographic ward where pump is located         |
+| public_meeting        | "True/False" indicator                                          |
+| scheme_management     | Type of the organization responsible for management of pump     |
+| scheme_name           | Name of organization responsible for management of pump         |
+| permit                | "True/False"" indicating whether the pump has valid permit      | 
+| construction_year     | The year the pump was installed                                 |
+| extraction_type       | Method of extraction used at a given pump site                  |
+| extraction_type_group | Aggregation of extraction_type categories                       |
+| extraction_type_class | Aggregation of extraction_type_group categories                 |
+| management            | Name of method employed for management of a given pump          |
+| management_group      | Possibly an aggregation of management categories                |
+| payment               | Categorical indicator of payment method required of pump users  |
+| payment_type          | Appears to be a duplicate of payment categories                 |
+| water_quality         | Categorical indicator of water quality produced by pump         |
+| quality_group         | Aggregation of water_quality categories                         |
+| quantity              | Categorical indicator of water quantity produced by pump        |
+| quantity_group        | Aggregation of quantity categories                              |
+| source                | Type of source of the water for a given pump                    |
+| source_type           | Aggregation of source categories                                |
+| source_type_class     | Aggregation of source_type categories                           |
+| waterpoint_type       | The type of pump installed at a well site                       |
+| waterpoint_type_group | Aggregation of waterpoint_type categories                       |
+
+# Administrative Variables
+
+Aside from **categorical** and **numeric variables**, the dataset also contain administrative variables which act as data management attributes within the data set. These are:
+
+| Administrative Variables | Description                                       |  
+|--------------------------|---------------------------------------------------|
+| id                       | Identification Variable (not a predictor)         |
+| date_recorded            | Date of data collection by survey company         |
+| recorded_by              | Name of the data collection / survey company      |
+
+
+# Examining Missing Data Values
+
+Every non-categorical numeric variable in the dataset has significant number of invalid data values represented by zeroes:
+
+| Numeric Variables   | Invalid Data Comments             |
+|---------------------|-----------------------------------|
+| amount_tsh          | 41,639 of 59,400 records = "0"    |
+| gps_height          | 20,438 of 59,400 records = "0"    |
+| population          | 21,381 of 59,400 records = "0"    |
+| longitude           | 1,812 zero values: likely invalid |
+| latitude            | 1,819 values < -1: likely invalid |
+| num_private         | 58,643 of 59,400 records = "0"    |
+
+Additionally, eight categorical variables contain missing data values (as indicated by either ‘NA’ values, zeroes, or blank character strings):
+
+| Categorical Var.  | No. of Distinct Values |	Missing	| Comments                     |
+|-------------------|------------------------|----------|------------------------------|
+| funder	          | 1898	                 |  3635    | 3582 NA’s coinc. w installer |
+| installer	        | 2146	                 |  3655	  | 3582 NA’s coinc. w funder    |
+| subvillage        |	19288	                 |  371     |                              |  	
+| public_meeting	  | 3	                     |  3334	  | valid values: TRUE/FALSE     |
+| scheme_management	| 13	                   |  3877	  |                              |
+| scheme_name	2697	| 28166	                 |          |                              |  
+| permit	          | 3	                     |  3056	  | valid values: TRUE/FALSE     |
+| construction_year	| 55	                   |  20709  	| valid values: 1960 - 2013    |
+
+More insights gained by analysis of the missing/invalid data:
+
+* 31,587 (53.17%) of the 59,400 records in the data set have missing data values.
+
+* 69.2% of subvillages, 52.1% of wards, 32% of lga's, and 19% of regions have no valid `amount_tsh` values.
+
+* Four regions, namely Dodoma, Kagera, Mbeya, Tabora, were found to have all zero values for the following variables:
+
+    1. `amount_tsh`
+    2. `gps_height`
+    3. `construction_year`
+    4. `num_private`
+    5. `population` 
+
+    These 4 regions correspond to 12,115 of the 59,400 records i.e. 20.39% of the     data set including 27 of the unique lga’s, 514   of the unique wards and 4644     of the unique subvillages. The 12,115 records covered by these regions           contain  60% of the zero   values found within the `gps_height` (12,115 /        20,438), `population` (12,115 / 21,381), and `construction_year` (12,115 /       20,709) variables.Since most of the missing values occur within regions of       Dodoma, Kagera, Mbeya, Tabora, it suggests a systematic data collection issue     within these 4 geographic areas and it seems that the waterpoints located        within these regions were not actually visited by the surveying company          (GeoData Consultants Ltd).
+
+* 3,582 of the missing `funder` and `installer` values coincide with each other.
+
+* 1,812 of the missing `gps_height` values coincide with missing `latitude` and `longitude` values.
+
+* 43 wards have no valid `public_meeting` values; 75 wards have no valid `scheme_management` values; 73 wards and 3 lga's have no valid `permit` values.
+
+# Key Data Insights from Data Analysis
+
+Analysis of data by aggregation of various variables/values provided additional insights like:
+
+* In the`funder` and `installer` variables there are lots of instances where a single valid data value is represented by different variations. E.g. 'Oxfam' vs. 'oxfarm', 'Government of Tanzania' vs. 'Ministry of Water' vs. 'Water'
+
+* There is no one-to-one relationship between the region and region_code variables (i.e., 21 distinct regions; 27 distinct  region_codes).
+
+* Aggregating by `extraction_type` we find an apparent chronological progression in the deployment of different pump technologies. For example, the median construction_year value for swn 80 (a type of hand pump) to be 1997 while that of the climax (a type of motor pump) is 2012.
+
+* After aggregating by `basin` it seems that there is an apparent chronological geographic progression in the installation of these waterpoints throughout Tanzania. For example, the Lake Nyasa basin has a median construction_year value of 1980 while the Wami / Ruvu basin's median construction_year is much later (2003).
+
+* The location of the water points seems to influence the amount of functional water points. It is hard to say whether this is due to geographical properties, like their geographical height, of the respective regions or political factors.
+
+* Several variables contained within the data set are either duplicative or binned versions of other variables:
+
+    1. `extraction_type_group` is a binned/aggregated version of `extraction_type`
+    2. `extraction_type_class` is a binned/aggregated version of `extraction_type_group`
+    3. `quality_group` is a binned/aggregated version of `water_quality`
+    4. `source_type` is a binned/aggregated version of `source`
+    5. `waterpoint_type_class` is a binned/aggregated version of `waterpoint_type`
+    6. `payment_type` is 100% duplicative of `payment`
+    7. `quantity_group` is 100% duplicative of `quantity`
+
+# ML Modeling Results
+
+We observe that Random Forest model achieved an overall accuracy of 81.13% and so if overall accuracy across each of the three possible water pump statuses is of most importance then Random Forest should be used. 
+However, if correctly identifying the largest number of pumps that are functional but in need of repair is the top priority, then Bootstrap Aggregation model should be adapted because even though it has a lower overall accuracy (79.91%) it can classify 'functional needs repair' pumps with greater accuracy (67.6%) than Random Forest (64.1%).
+
+## Most Predictive Features
+
+### `quantity`
+
+`quantity` represents the quantity of water available at the waterpoint and this column has no missing values. There are total of 5 distinct quantity categories :
+```{r, echo = F}
+c_quan <- arrange(summarise(group_by(water, quantity), 
+                     TotalWaterPoints = length(unique(id)) ), desc(TotalWaterPoints) )
+head(c_quan, n = 5)
+```
+
+In the plots shown below we observe that nearly all i.e. 91% of dry water points are non-functional. 71% of water points with unknown quantity description are non-functional as well. On the other hand, if the quantity level is ‘enough’ then there is a higher chance the water point is functional, that is, 65% of water pumps with 'enough' quantity are functional. 
+
+```{r, echo = F, quantity_plot}
+
+p1 = water %>% ggplot(aes(x = sortLvlsByN.fnc(as.factor(quantity)))) + geom_bar(fill = "dodgerblue", width = 0.6) + geom_text(stat='count', aes(label=..count..), vjust=-0.1) + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=0, hjust=0.5, face = "bold")) + labs(title = "Absolute Counts of Waterpoints by Quantity", x = "quantity")
+
+p2 = water %>% mutate(Status = sortLvls.fnc(as.factor(status_group), c(3,2,1))) %>% group_by(quantity) %>% ggplot(aes(x = as.factor(quantity))) + geom_bar(aes(fill = Status), width = 0.8, position = "fill") + labs(title = "Percentage of Waterpoints Quantity by Status", y = "Percent") + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x = element_text(angle = 0, hjust = 0.5, size = 10, face = "bold")) + scale_fill_manual(values= c("red", "orange", "forestgreen")) + geom_hline(yintercept=0.543, linetype="dashed", color = "black")
+
+p1; p2
+```
+*The black dashed line in the plot represents 54.3% which is the overall proportion of functional waterpoints in the dataset. Here, that proportion is used as a benchmark to compare against.*
+
+### `extraction_type`
+
+The extraction_type variable represents the method of extraction used by a given pump and there are no missing values for this variable. A total of 18 unique extraction_type values are found within the data set. Ten most frequently occuring extraction_types are shown below:
+
+```{r, echo = F}
+c_extract_t <- arrange(summarise(group_by(water, extraction_type), 
+                     TotalWaterPoints = length(unique(id)) ), desc(TotalWaterPoints) )
+head(c_extract_t, n = 10)
+```
+
+Plots below show that seven of the eighten extraction types have functional metrics that exceed the overall 54.3% benchmark. Of particular interest here is the gravity type since nearly 27,000 of the 59,400 total pumps rely on that approach, a far higher percentage than any of the other extraction types.
+
+```{r, echo = F, extraction_type_plot}
+
+p1 = water %>% ggplot(aes(x = sortLvlsByN.fnc(as.factor(extraction_type))))+ geom_bar(fill = "dodgerblue", width = 0.6) + geom_text(stat='count', aes(label=..count..), vjust=-0.1) + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=90, hjust=1, face = "bold"), plot.title = element_text(hjust = 0.5, vjust=1)) + labs(title = "Absolute Counts of Waterpoints by Extraction_Type", x = "extraction_type")
+
+p2 = water %>% mutate(Status = sortLvls.fnc(as.factor(status_group), c(3,2,1))) %>% group_by(quantity) %>% ggplot(aes(x = extraction_type)) + geom_bar(aes(fill = Status), width = 0.8, position = "fill") + labs(title = "Percentage of Waterpoints Extraction_type by Status ", y = "Percent") + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=90, hjust=1, size = 10, face = "bold"), plot.title = element_text(hjust=0.5)) + scale_fill_manual(values= c("red", "orange", "forestgreen")) + geom_hline(yintercept=0.543, linetype="dashed", color = "black")
+
+p1;p2
+```
+
+Additional features like `extraction_type_group` which is a composite version of `extraction_type` and `extraction_type_class` which is a composite version of `extraction_type_group` (and thus a super composite version of `extraction_type`) are also available in the dataset. As the table below indicates both of these features can help us identify what broad categories do the specific extraction methods fall into.
+
+
+|  Type                          | Group            | Class          |
+|--------------------------------|------------------|----------------|
+|  Gravity                       | Gravity          | Gravity        |
+|  Afridev                       | Afridev          | Hand pump      |
+|  India Mark II                 | India Mark II    | Hand pump      |
+|  India Mark III                | India Mark III   | Hand pump      |
+|  Nira/tanira                   | Nira/tanira      | Hand pump      |
+|  Swn 80                        | Swn 80           | Hand pump      |
+|  Other – play pump             | Other Handpump   | Hand pump      |
+|  Other – Swn 81                | Other Handpump   | Hand pump      |
+| Walimi                         | Other Handpump   | Hand pump      |
+|  Other – mkulima / shinyanga   | Other Handpump   | Hand pump      |
+|  Other                         | Other            | Other          |
+|  Submersible                   | Submersible      | Submersible    |
+|  KSB                           | Submersible      | Submersible    |
+|  Climax                        | Other Motor pump | Motor pump     |
+|  Cemo                          | Other Motor pump | Motor pump     | 
+|  Mono                          | Mono             | Motor pump     | 
+|  Windmill                      | Wind-powered     | Wind-powered   |   
+|  Other - rope pump             | Rope pump        | Rope pump      |
+
+Table: Granulariy of `extraction_type`
+
+### `waterpoint_type`
+
+The waterpoint_type variable indicates the type of pump installed at a given location and all the records in the dataset have a valid value i.e no missing or invalid values. There are total 7 unique waterpoint_type values within the data set:
+```{r, echo = F}
+c_waterp_t <- arrange(summarise(group_by(water, waterpoint_type), 
+                     TotalWaterPoints = length(unique(id)) ), desc(TotalWaterPoints) )
+c_waterp_t
+```
+
+As the plots indicate while waterpoints pumps having a dam as their waterpoint are the most likely to be functional there are only 7 pumps having a waterpoint_type of dam. Similar is the case with 'cattle trough' waterpoints, a large proportion of them are functional but very few of them exist. Interestingly, even though 'communal standpipe multiple' waterpoints are least likely to be functional, 'communal standpipe' waterpoints perform well relative to the overall functional benchmark of 54.3%. In fact, the most common waterpoint_type is communal standpipe followed by 'hand pump' waterpoints which also have a decent functional rate of 61.8%.
+
+```{r, echo = F, waterpoint_type_plot}
+
+p1 = water %>% ggplot(aes(x = sortLvlsByN.fnc(as.factor(waterpoint_type)))) + geom_bar(fill = "dodgerblue", width = 0.6) + geom_text(stat='count', aes(label=..count..), vjust=-0.1) + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=90, hjust=1, face= "bold"), plot.title = element_text(hjust = 0.5, vjust = 2)) + labs(title = "Absolute Counts of Waterpoints by Waterpoint_type", x = "waterpoint_type")
+
+p2 = water %>% mutate(Status = sortLvls.fnc(as.factor(status_group), c(3,2,1))) %>% group_by(waterpoint_type) %>% ggplot(aes(x = waterpoint_type)) + geom_bar(aes(fill = Status), width = 0.8, position = "fill") + labs(title = "Percentage of Waterpoints waterpoint_type by Status", y = "Percent") + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=90, hjust=1, size = 10, face = "bold"), plot.title = element_text(hjust = 0.5, vjust = 0.5)) + scale_fill_manual(values= c("red", "orange", "forestgreen")) + geom_hline(yintercept=0.543, linetype="dashed", color = "black")
+
+p1;p2
+```
+
+### `construction_year`
+
+The construction_year variable represents the year in which a given pump was installed. There are 54 unique non-zero construction year values ranging from 1960 through 2013, with 20,709 missing values (encoded as "0"). The summary statistics for construction_year are shown below:
+```{r, echo = F}
+summary(water$construction_year[which(water$construction_year > 0)])
+```
+
+The year values having the largest number of pump installations are shown below:
+
+```{r, echo = F}
+c_const_y <- arrange(summarise(group_by(water, construction_year), 
+                     TotalWaterPoints = length(unique(id)) ), desc(TotalWaterPoints) )
+head(c_const_y, n = 20)
+```
+
+To visualize the relationship between construction_year of the waterpoint and its status we can fit a linear model as shown below.
+
+```{r, echo = F, construction_year_plot, warning = F, message = F}
+p <- lineFrequency(water$construction_year,
+              water$status_group, 'Construction Year', cor=F)
+p + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.3, face = "bold"))
+```
+
+We see there is a clear linear relationship between status and construction_year for 'functional' and 'non-functional' waterpoints. That's not the case with ‘functional needs repair’ status, maybe because there are only very few data entries within this class and because 'functional needs repair' is a temporary state for a waterpoint.
+
+### `latitude` & `longitude`
+
+`longitude` and `latitude` variables represent the longitude and latitude coordinates of the waterpoint. Searching for invalid values, we find 1812 zero values within the longitude variable and 1819 values less than -1 for the latitude variable and every instance of a zero longitude value corresponds to an instance of a (< -1) latitude value. These values are invalid because based on Tanzania's geographic location valid entries should have a latitude between -11,73 and -1 and a longitude between 29.50 and 40.37. 
+
+Analysis of latitude and longitude tells us that pumps located between 34 and 38 degrees longitude are more likley to be functional than pumps at other longitudes, while those located between 30 and 31 degrees longitude are much more likely to have a status of functional needs repair than pumps located at other longitudes. In this way, longitude seems to be somewhat indicative of how likely a pump is to be non functional. 
+
+Using latitude and longitude we can see the distribution of three waterpoint statuses (functional, functional needs repair and non-functional) across Tanzania: 
+
+
+```{r, echo = F, lat_long_heatmap, message=F,warning=F}
+
+tanz_map = get_map("Tanzania", zoom = 6, maptype = "roadmap", source = "google", force = T)
+
+dat_all_wpts = water %>% filter(latitude < -1, longitude > 0)
+map_all_wpts = ggmap(tanz_map, extent = "normal") + geom_point(data = dat_all_wpts, aes(x= longitude, y = latitude), size = 0.1, alpha = 0.4, col = "orange") + labs(subtitle = "Fig 1. All Waterpoints Across Tanzania")
+map_all_wpts
+```
+
+```{r, echo = F}
+dat_func_wpts = dat_all_wpts %>% filter(status_group == "functional")
+map_func_wpts = ggmap(tanz_map, extent = "normal") + geom_density2d(data = dat_all_wpts, aes(x = longitude, y = latitude), size = 0.3) + stat_density2d(data = dat_func_wpts, aes(x = longitude, y = latitude, fill= ..level.., alpha = ..level..), size = 0.01, bins = 16, geom = "polygon") + scale_fill_gradient(low = "darkorchid", high = "darkorchid4") + scale_alpha(range = c(0, 0.5), guide = FALSE) + labs(subtitle = "Fig 2. Functional Waterpoints Map") + guides(fill = F)
+map_func_wpts
+```
+
+```{r, echo = F}
+#adding guides(fill = F) to not show the legend
+
+dat_func_rep_wpts = dat_all_wpts %>% filter(status_group == "functional needs repair")
+map_func_rep_wpts = ggmap(tanz_map, extent = "normal") + geom_density2d(data = dat_func_rep_wpts, aes(x = longitude, y = latitude), size = 0.3) + stat_density2d(data = dat_func_rep_wpts, aes(x = longitude, y = latitude, fill= ..level.., alpha = ..level..), size = 0.01, bins = 16, geom = "polygon") + scale_fill_gradient(low = "firebrick1", high = "firebrick4") + scale_alpha(range = c(0, 0.5), guide = FALSE) + labs(subtitle = "Fig 3. Functional Needs Repair Waterpoints Map") + guides(fill = F)
+map_func_rep_wpts;
+```
+
+```{r, echo = F}
+dat_non_func_wpts = dat_all_wpts %>% filter(status_group == "non functional")
+map_non_func_wpts = ggmap(tanz_map, extent = "normal") + geom_density2d(data = dat_non_func_wpts, aes(x = longitude, y = latitude), size = 0.3) + stat_density2d(data = dat_non_func_wpts, aes(x = longitude, y = latitude, fill= ..level.., alpha = ..level..), size = 0.01, bins = 16, geom = "polygon") + scale_fill_gradient(low = "deeppink1", high = "deeppink4") + scale_alpha(range = c(0, 0.5), guide = FALSE) + labs(subtitle = "Fig 4. Non-Functional Waterpoints Map") + guides(fill = F)
+map_non_func_wpts
+```
+
+
+
+
+
+We can notice some distinct patterns from the maps. Some areas contain more nonfunctional water points than functional. Those overlap especially with the southern coast and the area between the lakes Rukwa and Tanganyika. 
+
+As Fig. 3 and 4 suggest, the concentration for water pumps that are functional needs repair and non functional are more spread out throughout Tanzania, especially among the rural areas compared to functional.
+
+We also see high concentration of water points that are 'functional needs repair' in the Kigoma region. We can see this map validated, because the Tanzanian	Ministry of Water	reported that Kigoma city suffers from extremely poor supply of water and only serves 31% of its residents' water demand with only 5 hours of running	water every	day[5].
+
+These maps suggest that water relief	efforts	should be concentrated in the areas where along with indadequate converage by the functional water pumps there is high concentration of 'functional needs repair' and 'non-functional' waterpoints.	
+
+### `gps_height`
+
+The gps_height variable represents the physical altitude of a pump. A total of 20,438 data records contain a zero value for the gps_height variable. 1812 of these zero values occur when values for both latitude and longitude are apparently unknown.
+
+Barplots for the non-zero gps_height values show that pumps located at relatively higher altitudes are more likely to be functional than are pumps found at lower altitudes. This is probably at least in part influenced by the far lower amount of water points at great heights. On the other hand, there might be confounding factors like lower usage, better climate conditions or outdoor tourism causing an increased number of functional water points. 
+
+It should also be noted that pumps located at altitudes higher than agps_height value of approximately 2500 are also the most likely to be functional needs repair, followed by those lying within the approximate range of (1000:1600).
+
+```{r, echo = F, warning= F, message= F, gps_height_plot}
+water$gps_height_binned = cut(water$gps_height, breaks = seq(0, 2800, 200), dig.lab = 10, ordered_result = TRUE)
+
+p1 = water %>% filter(!is.na(gps_height_binned)) %>% 
+  ggplot(aes(x = sortLvlsByN.fnc(as.factor(gps_height_binned)))) + 
+  geom_bar(fill = "dodgerblue", width = 0.6) +
+  geom_text(stat='count', aes(label=..count..), vjust=-0.1) + 
+  theme_bw() +
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=45, hjust=1, face = "bold"), plot.title = element_text(hjust=0.5)) +
+  labs(title = "Absolute Counts of Waterpoints by GPS_height (binned)", x = "gps_height(binned") 
+
+p2 = water %>% mutate(Status = sortLvls.fnc(as.factor(status_group), c(3,2,1))) %>% filter(!is.na(gps_height_binned)) %>% group_by(gps_height_binned) %>% 
+  ggplot(aes(x = as.factor(gps_height_binned))) +
+  geom_bar(aes(fill = Status), width = 0.85, position = "fill") + labs(title = "Percentage of Waterpoints GPS_height (binned) by Status", y = "Percent") + theme_bw() +
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=45, hjust=1, face = "bold"), axis.text.y = element_text(face = "bold"), plot.title = element_text(hjust=0.5, vjust = -0.9)) + 
+  scale_fill_manual(values= c("red", "orange", "forestgreen")) + geom_hline(yintercept=0.543, linetype="dashed", color = "black") +  scale_x_discrete(labels = paste(as.character(seq(0,2600,200)), as.character(seq(200,2800,200)), sep = "-"))
+
+p1; p2
+```
+
+### `payment`
+
+The payment variable describes how water is actually paid for by users of the pump, if at all. There are 12 distinct payment values within the data set, with each record having a valid value i.e. there are no missing values. The number of pump installations per payment method is summarized in the table below.
+
+```{r, echo = F}
+c_paymt <- arrange(summarise(group_by(water, payment), TotalWaterPoints = length(unique(id))), desc(TotalWaterPoints))
+c_paymt
+```
+
+As shown above, more than 25,000 pumps require no payment for their use, and, unsurprisingly, as shown in the plots below, those pumps appear to be the least functional overall if unknown payment types are excluded. However, pumps that do not require payment may be located in remote areas where collection of payment is not feasible. Nevertheless, it appears reasonable to conclude that requiring users to pay for use of a pump is more likely to result in a pump remaining functional as opposed to a pump for which no payment is required.
+
+```{r, echo = F, payment_plot}
+
+p1 = water %>% ggplot(aes(x = sortLvlsByN.fnc(as.factor(payment)))) + geom_bar(fill = "dodgerblue", width = 0.6) + geom_text(stat='count', aes(label=..count..), vjust = -0.1) + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=90, hjust=1, face = "bold"), plot.title = element_text(hjust=0.5)) + labs(title = "Absolute Counts of Waterpoints by payment", x = "payment") 
+
+p2 = water %>% mutate(Status = sortLvls.fnc(as.factor(status_group), c(3,2,1))) %>% group_by(payment) %>%  ggplot(aes(x = payment)) +
+  geom_bar(aes(fill = Status), width = 0.8, position = "fill") + labs(title = "Percentage of Waterpoints Payment by Status", y = "Percent") + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=90, hjust=1, face= "bold"), plot.title = element_text(hjust=0.5)) + scale_fill_manual(values= c("red", "orange", "forestgreen")) + geom_hline(yintercept=0.543, linetype="dashed", color = "black") 
+
+p1;p2
+```
+
+### `source`
+
+The source variable indicates the source of the water for a given pump. The summary statistics shown below indicate a total of 10 distinct source values within the data set, with each record having a valid value i.e. there no missing values).
+
+```{r, echo = F, warning = F, message = F}
+c_source <- arrange(summarise(group_by(water, source), 
+                     TotalWaterPoints = length(unique(id)) ), desc(TotalWaterPoints) )
+head(c_source, n = 10)
+```
+
+As shown below, the spring category of the source variable offers the highest percentage of functional pumps and also represents the largest source category with 17,021 pumps. The next most common source category shallow well by contrast, doesn't perform so well. While most of the lake category waterpoints are it represents only 765 of the 59,400 pumps represented in the data set. Of the other categories represented, 57.8% of are also not functioning.
+
+```{r, echo = F, warning = F, message = F, source_plot}
+
+p1 = water %>% ggplot(aes(x = sortLvlsByN.fnc(as.factor(source)))) + geom_bar(fill = "dodgerblue", width = 0.6) + geom_text(stat='count', aes(label=..count..), vjust = -0.1) + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=90, hjust=1, face="bold"), plot.title = element_text(hjust=0.5)) + labs(title = "Absolute Counts of Waterpoints by Source", x = "source") 
+
+p2 = water %>% mutate(Status = sortLvls.fnc(as.factor(status_group), c(3,2,1))) %>% group_by(source) %>%  ggplot(aes(x = source)) +
+  geom_bar(aes(fill = Status), width = 0.8, position = "fill") + labs(title = "Percentage of Waterpoints Source by Status", y = "Percent") + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=90, hjust=1, face = "bold"), plot.title = element_text(hjust=0.5)) + scale_fill_manual(values= c("red", "orange", "forestgreen")) + geom_hline(yintercept=0.543, linetype="dashed", color = "black") 
+p1;p2
+```
+Additional features like `source_type_group` which is a composite version of `source_type` and `source_type_class` which is a composite version of `source_type_group` (and thus a super composite version of `source_type`) are also available in the dataset. As the table below indicates both of these features can help us identify what broad categories do the specific sources fall into.
+
+
+| Type                 | Group                | Class        |
+|----------------------|----------------------|--------------|
+| Spring               | Spring               | Ground water |
+| Machine dbh          | Borehole             | Ground water |
+| Hand dtw             | Borehole             | Ground water |
+| Shallow well         | Shallow well         | Ground water |
+| Rainwater Harvesting | Rainwater Harvesting | Surface      |
+| River/Lake           | River/Lake           | Surface      |
+| Dam                  | Dam                  | Surface      |
+| Other                | Other                | Other        |
+| Unknown              | Other                | Other        |
+
+
+### `region_code`
+
+The region_code variable provides an integer code for the Tanzanian region within which a given pump is located. The summary statistics shown below indicate a total of 27 distinct region codes within the data set, with each record having a valid value. The 20 region codes having the largest number of pump installations are summarized in the table below.
+```{r, echo = F}
+water %>% group_by(region_code) %>% summarise(TotalWaterPoints = n()) %>% arrange(desc(TotalWaterPoints)) %>% head(20)
+```
+
+It is unclear why there are 27 region_code values when there are only 20 possible values for the region variable. It is possibile that some of the region codes have either simply been entered incorrectly or were deliberately entered incorrectly due to uncertainty over the correct region_code value to apply to a given record.
+
+Plotting the status of pumps relative to each value of the region_code variable shows even greater disparities between geographic regions for functional pumps, from a low of 8.7% in Region 8 to nearly 97% in Region 24. Region 16 shows an unusually large 21.4% of its pumps having a status of “functional needs repair” while Region 40’s single pump (100% of the pumps in that region) is not functioning.
+
+```{r, echo = F, region_code_plot}
+
+p1 = water %>% ggplot(aes(x = sortLvlsByN.fnc(as.factor(region_code)))) + geom_bar(fill = "dodgerblue", width = 0.6)  + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=0, hjust=1, face = "bold"), plot.title = element_text(hjust=0.5)) + labs(title = "Absolute Counts of Waterpoints by Region_code", x = "region_code") 
+
+p2 = water %>% mutate(Status = sortLvls.fnc(as.factor(status_group), c(3,2,1))) %>% group_by(as.factor(region_code)) %>%  ggplot(aes(x = as.factor(region_code))) +
+  geom_bar(aes(fill = Status), width = 0.8, position = "fill") + labs(title = "Percentage of Waterpoints Region_code by Status", y = "Percent") + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=0, hjust=1, face = "bold"), plot.title = element_text(hjust=0.5)) + scale_fill_manual(values= c("red", "orange", "forestgreen")) + geom_hline(yintercept=0.543, linetype="dashed", color = "black")
+
+# Display both plots
+p1; p2
+```
+### `district_code`
+
+The district_code variable provides an integer coding of the Tanzanian district within which a given pump is located. The summary statistics shown below indicate a total of 20 distinct district codes within the data set, with each record having a valid value. The number of pumps per district code is summarized in the table below.
+
+```{r, echo = F}
+# calc number of wells per basin
+distc <- arrange(summarise(group_by(water, district_code), 
+                     TotalWaterPoints = length(unique(id)) ), desc(TotalWaterPoints) )
+head(distc, n = 20)
+```
+
+The district_code variable shows a wide disparity in the percentage of functional pumps, ranging from a low of 17.4% for district 0 to a hight of 83.3% in district 67. Only 9 of the 20 districts exceed the overall 54.3% functional pump metric. Furthermore we see that six districts’ “non functional” pump percentages exceed 60%.
+
+```{r, echo = F, district_code_plot}
+
+p1 = water %>% ggplot(aes(x = sortLvlsByN.fnc(as.factor(district_code)))) + geom_bar(fill = "dodgerblue", width = 0.6) + geom_text(stat='count', aes(label=..count..), vjust = -0.1) + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=0, hjust=1, face = "bold"), plot.title = element_text(hjust=0.5)) + labs(title = "Absolute Counts of Waterpoints by District_code", x = "region_code") 
+
+h = 0.543
+p2 = water %>% mutate(Status = sortLvls.fnc(as.factor(status_group), c(3,2,1))) %>% group_by(as.factor(district_code)) %>%  ggplot(aes(x = as.factor(district_code))) +
+  geom_bar(aes(fill = Status), width = 0.8, position = "fill") + labs(title = "Percentage of Waterpoints District_code by Status", y = "Percent") + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=0, hjust=1, face = "bold"), plot.title = element_text(hjust=0.5)) + scale_fill_manual(values= c("red", "orange", "forestgreen")) + geom_hline(yintercept=h, linetype="dashed", color = "black")
+p1; p2
+# Display both plots
+
+```
+
+
+### `population`
+
+```{r, echo = F, population_plot}
+#normalize the counts per value level
+normalizedCounts <- function(x, y, breaks = NULL, labels = NULL){
+  if (class(x) == 'numeric' || class(x) == 'integer'){
+    x <- cut(x, 
+             breaks = breaks, 
+             labels = labels)
+  }
+  df <- data.frame(x = x, y=y)
+  tab <- as.data.frame(table(df))
+  tab_wide <- reshape(tab, 
+                      v.names="Freq", 
+                      timevar="y", 
+                      idvar="x", 
+                      direction='wide')
+  rownames(tab_wide) <- tab_wide$x
+  tab_wide$x <- NULL
+  tab_norm <- as.data.frame(t(apply(tab_wide, 1, function(x) x/sum(x))))
+  if (class(x) == 'numeric' || class(x) == 'integer'){
+    tab_norm$label <- as.numeric(rownames(tab_norm))
+  }else{
+    tab_norm$label <- rownames(tab_norm)
+  }
+  melt(tab_norm)
+}
+
+bivariate <- function(x, y, 
+                      breaks = NULL, 
+                      labels = NULL, 
+                      facet = factor(), 
+                      colors = colors_vec, 
+                      names_vec = NULL){
+  df <- data.frame(x=x, y=y)
+  rel_count_functional <- nrow(subset(df, y=='functional'))/nrow(df)
+  
+  p2 <- ggplot(normalizedCounts(df$x, 
+                                df$y,
+                                breaks,
+                                labels), 
+               aes(x=label, y=value, fill=variable)) + scale_x_continuous()+ theme(panel.border = element_blank(), panel.grid.major = element_blank(), axis.title.x=element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), axis.text.x=element_text(angle=0, hjust=1, face = "bold"), plot.title = element_text(hjust=0.5))
+  
+
+    p2 <- p2 + geom_bar(stat='identity', aes(x=as.numeric(label))) 
+  
+ 
+  p2 <- p2 + geom_hline(yintercept=rel_count_functional) +
+             theme(axis.text.x = element_text(angle = 90, 
+                                              hjust = 1, 
+                                              vjust = 0.3),
+                   legend.position="top") + 
+             scale_fill_manual(values=colors, 
+                               name = "Water Point Status")
+
+p2
+}
+actual_labels = 10 ^ seq(-0, 4.7, by = 0.25)
+bivariate(log10(water$population + 1) , water$status_group,  breaks = seq(-0.25, 4.7, by = 0.25),
+                              labels = seq(-0, 4.7, by = 0.25))
+```
+
+
+
+The population variable represents the human population in the area surrounding a pump. In this dataset, 21,381 data records have missing values for the population variable and these missing values can be imputed by getting the population data from the Tanzanian National Bureau of	Statistics[5].
+
+Some insights about the effect of population on status of the waterpoint:
+
+* Most of the pumps are located in the vicinity of small villages of less than 500 people. 
+
+* For waterpoints with less than 1000 people around them there doesn't seem to be an obvious relationship between the population and the functioning status of the pump. 
+
+* In case of larger populations (> 1000) we notice that pumps located in larger population areas are somewhat more likely to have a status of `functional needs repair` than pumps located in less densely populated areas. This might be related to the high frequency usage of the pumps.
+
+* Interestingly, pumps located in relatively higher population areas appear to be somewhat less likely to be non functional than are pumps located in areas with relatively smaller populations. Maybe large number of people leads to greater amount of collective interest in maintaing the pump.
+
+* Finally, very high numbers of people living around a water point give apparent high frequencies of functional water points however high population waterpoints are very few and there might be confounding factors here.
+ 
+## Least Predictive Features
+
+The `subvillage` variable and many of the binned `ward` and `lga` variables were found to have relatively low predictive strength and the `region` variable was found to add no value if the region_code variable was already included within a model.
+
+# References
+
+1. Dräbing: https://github.com/tdraebing/Exploring-waterpoint-conditions-in-Tanzania
+
+2. Topor et. al: https://rstudio-pubs-static.s3.amazonaws.com/339668_006f4906390e41cea23b3b786cc0230a.html
+
+3. Agrawal et. al: https://www.andrew.cmu.edu/user/kdagrawa/documents/waterpump.pdf
+
+4. Benoot: https://lib.ugent.be/fulltxt/RUG01/002/350/680/RUG01-002350680_2017_0001_AC.pdf
+
+5. Water	Sector	Status	Report	2009.	Tanzania	Ministry	of	Water	and	Irrigation.
+https://www.kfw-entwicklungsbank.de/migration/Entwicklungsbank-Startseite/DevelopmentFinance/About-Us/Local-Offices/Sub-Saharan-Africa/Office-Tanzania/Activities-inTanzania/Water-Sector-Status-Report-2009.pdf
+
+6. Population	Distribution	of	Tanzania	Regions	by	District,	Ward	and	Village/Mtaa.	National	
+Bureau	of	Statistics.	http://digitallibrary.ihi.or.tz/2168/
